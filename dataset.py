@@ -46,7 +46,7 @@ class CLIPDataset(torch.utils.data.Dataset):
         image1 = self.read_image(self.image_filenames1[idx])
         image2 = self.read_image(self.image_filenames2[idx])
 
-        max_depth = max(image1.shape[1], image2.shape[1])
+        max_depth = min(image1.shape[1], image2.shape[1])
         
         if z_index is None:
             while True:
@@ -55,7 +55,7 @@ class CLIPDataset(torch.utils.data.Dataset):
                 std2 = image2[:, z_index:z_index + CFG.CROP_SIZE_D, ...].std()
                 if std1 > 0 and std2 > 0:
                     break
-        
+
         image1 = image1[:, z_index:z_index + CFG.CROP_SIZE_D, ...]
         image2 = image2[:, z_index:z_index + CFG.CROP_SIZE_D, ...]
 
@@ -92,5 +92,76 @@ def get_transforms(mode="train"):
                 tio.transforms.CropOrPad((CFG.CROP_SIZE, CFG.CROP_SIZE, CFG.CROP_SIZE_D)),
                 tio.transforms.Resize((CFG.IMG_SIZE_W, CFG.IMG_SIZE_H, CFG.IMG_SIZE_D)),
                 tio.transforms.ZNormalization()
+            ]
+        )
+
+def get_optimized_dataloaders(image_filenames1, image_filenames2, transforms):
+    subjects = []
+    # for image_path1, image_path2 in zip(image_filenames1, image_filenames2):
+    #     shape1 = sitk.ReadImage(image_path1)
+    #     shape1 = shape1.GetSize()
+    #     direction1 = sitk.ReadImage(image_path1).GetDirection()
+    #     shape2 = sitk.ReadImage(image_path2)
+    #     shape2 = shape2.GetSize()
+    #     direction2 = sitk.ReadImage(image_path2).GetDirection()
+    #     if shape1 != shape2 or direction1 != direction2:
+    #         if shape1[-1] < shape2[-1]:
+    #             larger_image_path = image_path2
+    #             smaller_image_path = image_path1
+    #             smaller_shape = shape1
+    #         else:
+    #             larger_image_path = image_path1
+    #             smaller_image_path = image_path2
+    #             smaller_shape = shape2
+
+    #         larger_image = sitk.GetArrayFromImage(sitk.ReadImage(larger_image_path))
+    #         larger_image = larger_image [:smaller_shape[-1], ...]
+    #         larger_image = sitk.GetImageFromArray(larger_image)
+    #         larger_image.SetSpacing(sitk.ReadImage(smaller_image_path).GetSpacing())
+    #         larger_image.SetDirection(sitk.ReadImage(smaller_image_path).GetDirection())
+
+    #         import shutil
+    #         # shutil.move(larger_image_path, larger_image_path.replace('.nii.gz', '_original.nii.gz'))
+    #         print(f"Resizing {larger_image_path} to {smaller_shape} (Original image has been saved as {larger_image_path.replace('.nii.gz', '_original.nii.gz')})")
+    #         sitk.WriteImage(larger_image, larger_image_path)
+
+    for image_path1, image_path2 in zip(image_filenames1, image_filenames2):
+        subject = tio.Subject(
+            image1=tio.ScalarImage(image_path1),
+            image2=tio.ScalarImage(image_path2),
+            non_zero_mask1=tio.ScalarImage(image_path1),
+        )
+        subjects.append(subject)
+    subjects_dataset = tio.SubjectsDataset(subjects, transform=transforms)
+    patches_queue = tio.Queue(
+        subjects_dataset,
+        max_length=400,
+        samples_per_volume=10,
+        sampler=tio.data.WeightedSampler(patch_size=[512, 512, 32], probability_map="non_zero_mask1"),
+        num_workers=CFG.num_workers,
+        shuffle_subjects=True,
+    )
+    patches_loader = torch.utils.data.DataLoader(
+        patches_queue,
+        batch_size=CFG.batch_size,
+        num_workers=0,  # this must be 0
+    )
+    return patches_loader
+
+def get_torchio_transforms(mode="train"):
+    if mode == "train":
+        return transforms.Compose(
+            [
+                tio.transforms.CropOrPad((CFG.CROP_SIZE, CFG.CROP_SIZE, 375)),
+                tio.transforms.Resize((CFG.IMG_SIZE_W, CFG.IMG_SIZE_H, 375)),
+                tio.transforms.ZNormalization(exclude=["non_zero_mask1"])
+            ]
+        )
+    else:
+        return transforms.Compose(
+            [
+                tio.transforms.CropOrPad((CFG.CROP_SIZE, CFG.CROP_SIZE, 375)),
+                tio.transforms.Resize((CFG.IMG_SIZE_W, CFG.IMG_SIZE_H, 375)),
+                tio.transforms.ZNormalization(exclude=["non_zero_mask1"])
             ]
         )

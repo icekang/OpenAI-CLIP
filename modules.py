@@ -12,7 +12,7 @@ class ImageEncoder(nn.Module):
     """
 
     def __init__(
-        self, model_name=CFG.model_name, pretrained=CFG.pretrained, trainable=CFG.trainable
+        self, trainable=CFG.trainable
     ):
         super().__init__()
         trainer = get_trainer_from_args(
@@ -23,6 +23,7 @@ class ImageEncoder(nn.Module):
             plans_identifier=CFG.nnUNet['plans_identifier'],
             device=torch.device('cpu'))
         trainer.initialize()
+        # trainer.load_checkpoint(CFG.nnUNet['checkpoint']) # load the checkpoint if needed
         self.model = copy.deepcopy(trainer.network.encoder) # only the encoder part will be used for nnUNet
         self.pool = nn.Sequential(
             nn.AdaptiveAvgPool3d(1),

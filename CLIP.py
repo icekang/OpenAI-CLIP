@@ -5,27 +5,37 @@ import torch.nn.functional as F
 import config as CFG
 from modules import ImageEncoder, ProjectionHead
 from pathlib import Path
+import torchio as tio
 
 class CLIPModel(nn.Module):
     def __init__(
         self,
         temperature=CFG.temperature,
         image_embedding=CFG.image_embedding,
-        text_embedding=CFG.text_embedding,
+        shared_projector=CFG.shared_projector,
+        shared_encoder=CFG.shared_encoder,
     ):
         super().__init__()
         self.image_encoder1 = ImageEncoder()
         self.image_projection1 = ProjectionHead(embedding_dim=image_embedding)
 
-        self.image_encoder2 = ImageEncoder()
-        self.image_projection2 = ProjectionHead(embedding_dim=image_embedding)
+        if CFG.shared_encoder:
+            self.image_encoder2 = self.image_encoder1
+        else:
+            self.image_encoder2 = ImageEncoder()
+        
+        if CFG.shared_projector:
+            self.image_projection2 = self.image_projection1
+        else:
+            self.image_projection2 = ProjectionHead(embedding_dim=image_embedding)
+
         self.temperature = temperature
 
     def visualize_clip_loss(self, logits, suffix=""):
         import matplotlib.pyplot as plt
         import seaborn as sns
         import datetime
-        debug_dir = Path("./debug_clip_loss")
+        debug_dir = Path("logs" ) /  CFG.experiment_name / "debug_loss"
         debug_dir.mkdir(exist_ok=True)
 
         sns.heatmap(logits.detach().cpu().numpy())
@@ -38,7 +48,7 @@ class CLIPModel(nn.Module):
         import torchio as tio
         import datetime
 
-        debug_dir = Path("./debug_clip_data")
+        debug_dir = Path("logs" ) /  CFG.experiment_name / "debug_data"
         debug_dir.mkdir(exist_ok=True)
 
         subjects = dict()
@@ -50,31 +60,48 @@ class CLIPModel(nn.Module):
 
         tio.Subject(
             **subjects
-        ).plot(figsize=((batch_idx + 1) * 10, 20), output_path=f"./debug_clip_data/{time_now}_{suffix}_subjects.png")
+        ).plot(figsize=((batch_idx + 1) * 2, 4), output_path=debug_dir / f"{time_now}_{suffix}_subjects.png")
         plt.close('all')
 
-    def forward(self, batch, mode="train"):
-        self.visualize_data(batch, suffix=f"{mode}_data")
+    def forward(self, batch, mode="train", visualize=False):
+        image1 = batch["image1"]
+        image2 = batch["image2"]
+
+        # Check for NaN values
+        masks = torch.isnan(image1) | torch.isnan(image2)
+        masks = ~masks.any(dim=(1, 2, 3, 4))
+        image1 = image1[masks]
+        image2 = image2[masks]
+
         # Getting Image and Text Features
-        image_features1 = self.image_encoder1(batch["image1"])
-        image_features2 = self.image_encoder2(batch["image2"])
+        image_features1 = self.image_encoder1(image1)
+        image_features2 = self.image_encoder2(image2)
 
         # Getting Image and Text Embeddings (with same dimension)
         image_embeddings1 = self.image_projection1(image_features1)
         image_embeddings2 = self.image_projection2(image_features2)
 
         # Calculating the Loss
-        logits = (image_embeddings2 @ image_embeddings1.T) / self.temperature
-        self.visualize_clip_loss(torch.nn.functional.log_softmax(logits, dim=-1), suffix=f"{mode}_logits")
-        images_similarity1 = image_embeddings1 @ image_embeddings1.T
-        images_similarity2 = image_embeddings2 @ image_embeddings2.T
-        targets = F.softmax(
-            (images_similarity1 + images_similarity2) / 2 * self.temperature, dim=-1
-        )
-        self.visualize_clip_loss(targets, suffix=f"{mode}_targets")
-        images_loss2 = cross_entropy(logits, targets, reduction='none')
-        images_loss1 = cross_entropy(logits.T, targets.T, reduction='none')
-        loss =  (images_loss1 + images_loss2) / 2.0 # shape: (batch_size)
+        logits = ((image_embeddings2 @ image_embeddings1.T) + (image_embeddings1 @ image_embeddings2.T)) / 2.0 / self.temperature
+        if visualize:
+            # non_nan_masks = ~masks.any(dim=(1, 2, 3, 4))
+            self.visualize_data(batch, suffix=f"{mode}_data")
+            # self.visualize_clip_loss(F.softmax(logits[non_nan_masks][:, non_nan_masks], dim=-1), suffix=f"{mode}_logits")
+            self.visualize_clip_loss(F.softmax(logits, dim=-1), suffix=f"{mode}_logits")
+        # images_similarity1 = image_embeddings1 @ image_embeddings1.T
+        # images_similarity2 = image_embeddings2 @ image_embeddings2.T
+        # targets = F.softmax(
+        #     (images_similarity1 + images_similarity2) / 2 * self.temperature, dim=-1
+        # )
+        # self.visualize_clip_loss(targets, suffix=f"{mode}_targets")
+        batch_size = image_embeddings1.shape[0]
+        # nan_masks = masks.any(dim=(1, 2, 3, 4))
+        # logits[nan_masks, :] *= 0
+        # logits[:, nan_masks] *= 0
+        loss = nn.CrossEntropyLoss()(logits, torch.arange(batch_size, device=CFG.device)) # use a simpler loss function 
+        # images_loss2 = cross_entropy(logits, targets, reduction='none')
+        # images_loss1 = cross_entropy(logits.T, targets.T, reduction='none')
+        # loss =  (images_loss1 + images_loss2) / 2.0 # shape: (batch_size)
         return loss.mean()
 
 

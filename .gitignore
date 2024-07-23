@@ -1,3 +1,7 @@
 *.pyc
 __pycache__
 wandb/
+.ipynb_checkpoints/
+debug_clip_data*/
+debug_clip_loss*/
+logs/

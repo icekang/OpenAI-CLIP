@@ -9,13 +9,36 @@ import torch
 from torch import nn
 
 import config as CFG
-from dataset import CLIPDataset, get_transforms
+from dataset import CLIPDataset, get_transforms, get_optimized_dataloaders, get_torchio_transforms
 from CLIP import CLIPModel
 from utils import AvgMeter, get_lr
+import torchio as tio
 from torch.utils.tensorboard import SummaryWriter
+from pathlib import Path
+from argparse import ArgumentParser
+
+def make_logdir():
+    logdir = Path("logs") / CFG.experiment_name
+    logdir.mkdir(exist_ok=True, parents=True)
+
+    debug_data = logdir / "debug_data"
+    debug_data.mkdir(exist_ok=True)
+
+    debug_loss = logdir / "debug_loss"
+    debug_loss.mkdir(exist_ok=True)
+
+    return logdir
+
+def seed_everything(seed):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 def make_train_valid_dfs():
-    dataframe = pd.read_csv(f"{CFG.captions_path}/pre_final_coregistration.csv")
+    dataframe = pd.read_csv(f"{CFG.captions_path}/pre_post_coregistration.csv")
     max_id = dataframe["id"].max() + 1 if not CFG.debug else 100
     image_ids = np.arange(0, max_id)
     np.random.seed(42)
@@ -29,35 +52,49 @@ def make_train_valid_dfs():
 
 
 def build_loaders(dataframe, mode):
-    transforms = get_transforms(mode=mode)
-    dataset = CLIPDataset(
-        dataframe["image1"].values,
-        dataframe["image2"].values,
+    # transforms = get_transforms(mode=mode)
+    transforms = get_torchio_transforms(mode=mode)
+    dataloader = get_optimized_dataloaders(
+        image_filenames1=dataframe["image1"].values,
+        image_filenames2=dataframe["image2"].values,
         transforms=transforms,
     )
-    dataloader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=CFG.batch_size,
-        num_workers=CFG.num_workers,
-        shuffle=True if mode == "train" else False,
-    )
+    # dataset = CLIPDataset(
+    #     dataframe["image1"].values,
+    #     dataframe["image2"].values,
+    #     transforms=transforms,
+    # )
+    # dataloader = torch.utils.data.DataLoader(
+    #     dataset,
+    #     batch_size=CFG.batch_size,
+    #     num_workers=CFG.num_workers,
+    #     shuffle=True if mode == "train" else False,
+    # )
     return dataloader
 
 
 def train_epoch(model, train_loader, optimizer, lr_scheduler, step, scaler):
     loss_meter = AvgMeter()
     tqdm_object = tqdm(train_loader, total=len(train_loader))
-    for batch in tqdm_object:
+    optimizer.zero_grad(set_to_none=True)
+
+    for iteration, batch in enumerate(tqdm_object):
+        device = CFG.device
+        batch['image1'] = batch['image1'][tio.DATA].permute(0, 1, 4, 3, 2).to(device)
+        batch['image2'] = batch['image2'][tio.DATA].permute(0, 1, 4, 3, 2).to(device)
         with torch.autocast(device_type="cuda", dtype=torch.float16):
-            batch = {k: v.to(CFG.device) for k, v in batch.items() if k not in ["caption", "image_path1", "image_path2", "image_z_index"]}
-            loss = model(batch)
-            
+            # batch = {k: v[tio.DATA].to(CFG.device) for k, v in batch.items() if k not in ["caption", "image_path1", "image_path2", "image_z_index"]}
+            visualize = iteration % CFG.visualize_every == 0
+            loss = model(batch, visualize=visualize)
+            if loss.isnan():
+                print("Loss is NaN, skip updating model")
+                continue
+        
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
         if step == "batch":
-            lr_scheduler.step()
-        optimizer.zero_grad()
+            lr_scheduler.step(loss)
 
         count = batch["image1"].size(0)
         loss_meter.update(loss.item(), count)
@@ -70,10 +107,15 @@ def valid_epoch(model, valid_loader):
     loss_meter = AvgMeter()
 
     tqdm_object = tqdm(valid_loader, total=len(valid_loader))
-    for batch in tqdm_object:
+    for iteration, batch in enumerate(tqdm_object):
+        device = CFG.device
+        batch['image1'] = batch['image1'][tio.DATA].permute(0, 1, 4, 3, 2).to(device)
+        batch['image2'] = batch['image2'][tio.DATA].permute(0, 1, 4, 3, 2).to(device)
         with torch.autocast(device_type="cuda", dtype=torch.float16):
-            batch = {k: v.to(CFG.device) for k, v in batch.items() if k not in ["caption", "image_path1", "image_path2", "image_z_index"]}
-            loss = model(batch, mode="valid")
+            # batch = {k: v.to(CFG.device) for k, v in batch.items() if k not in ["caption", "image_path1", "image_path2", "image_z_index"]}
+
+            visualize = iteration % CFG.visualize_every == 0
+            loss = model(batch, mode="valid", visualize=visualize)
 
         count = batch["image1"].size(0)
         loss_meter.update(loss.item(), count)
@@ -83,7 +125,7 @@ def valid_epoch(model, valid_loader):
 
 
 def main():
-    writer = SummaryWriter()
+    writer = SummaryWriter(Path("logs") / CFG.experiment_name / "runs")
     train_df, valid_df = make_train_valid_dfs()
     train_loader = build_loaders(train_df, mode="train")
     valid_loader = build_loaders(valid_df, mode="valid")
@@ -104,6 +146,8 @@ def main():
         print(f"Epoch: {epoch + 1}")
         model.train()
         train_loss = train_epoch(model, train_loader, optimizer, lr_scheduler, step, scaler)
+        if step == "epoch":
+            lr_scheduler.step(train_loss.avg)
         writer.add_scalar("Loss/train", train_loss.avg, epoch)
         model.eval()
         with torch.no_grad():
@@ -112,9 +156,28 @@ def main():
         
         if valid_loss.avg < best_loss:
             best_loss = valid_loss.avg
-            torch.save(model.state_dict(), "best.pt")
+            torch.save(model.state_dict(), Path("logs") / CFG.experiment_name / "best.pt")
             print("Saved Best Model!")
 
 
 if __name__ == "__main__":
+    parser = ArgumentParser()
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--config", type=str, default=None)
+    args = parser.parse_args()
+    if args.config is not None:
+        import yaml
+        with open(args.config, "r") as file:
+            config = yaml.load(file, Loader=yaml.FullLoader)
+        for key, value in config.items():
+            setattr(CFG, key, value)
+    print("Start training with the following configuration:")
+    print(CFG)
+
+    print("Setting seed to be:", args.seed)
+    seed_everything(args.seed)
+
+    make_logdir()
+
+
     main()
