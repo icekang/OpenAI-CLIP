@@ -4,4 +4,7 @@ wandb/
 .ipynb_checkpoints/
 debug_clip_data*/
 debug_clip_loss*/
+debug_clip*/
 logs/
+runs/
+visual_feature_visualization/
