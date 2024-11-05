@@ -38,7 +38,7 @@ def seed_everything(seed):
     torch.backends.cudnn.benchmark = False
 
 def make_train_valid_dfs():
-    dataframe = pd.read_csv(f"{CFG.captions_path}/pre_post_coregistration.csv")
+    dataframe = pd.read_csv(f"{CFG.captions_path}/pre_final_coregistration.csv")
     max_id = dataframe["id"].max() + 1 if not CFG.debug else 100
     image_ids = np.arange(0, max_id)
     np.random.seed(42)
@@ -73,22 +73,23 @@ def build_loaders(dataframe, mode):
     return dataloader
 
 
-def train_epoch(model, train_loader, optimizer, lr_scheduler, step, scaler):
+def train_epoch(model, train_loader, optimizer, lr_scheduler, step, scaler, epoch=None):
     loss_meter = AvgMeter()
     tqdm_object = tqdm(train_loader, total=len(train_loader))
     optimizer.zero_grad(set_to_none=True)
 
+    softmax_logits = []
     for iteration, batch in enumerate(tqdm_object):
         device = CFG.device
         batch['image1'] = batch['image1'][tio.DATA].permute(0, 1, 4, 3, 2).to(device)
         batch['image2'] = batch['image2'][tio.DATA].permute(0, 1, 4, 3, 2).to(device)
         with torch.autocast(device_type="cuda", dtype=torch.float16):
-            # batch = {k: v[tio.DATA].to(CFG.device) for k, v in batch.items() if k not in ["caption", "image_path1", "image_path2", "image_z_index"]}
             visualize = iteration % CFG.visualize_every == 0
-            loss = model(batch, visualize=visualize)
+            loss, softmax_logit = model(batch, visualize=visualize, epoch=epoch)
             if loss.isnan():
                 print("Loss is NaN, skip updating model")
                 continue
+            softmax_logits.append(softmax_logit)
         
         scaler.scale(loss).backward()
         scaler.step(optimizer)
@@ -100,13 +101,14 @@ def train_epoch(model, train_loader, optimizer, lr_scheduler, step, scaler):
         loss_meter.update(loss.item(), count)
 
         tqdm_object.set_postfix(train_loss=loss_meter.avg, lr=get_lr(optimizer))
-    return loss_meter
+    return loss_meter, softmax_logits
 
 
-def valid_epoch(model, valid_loader):
+def valid_epoch(model, valid_loader, epoch=None):
     loss_meter = AvgMeter()
 
     tqdm_object = tqdm(valid_loader, total=len(valid_loader))
+    softmax_logits = []
     for iteration, batch in enumerate(tqdm_object):
         device = CFG.device
         batch['image1'] = batch['image1'][tio.DATA].permute(0, 1, 4, 3, 2).to(device)
@@ -115,14 +117,37 @@ def valid_epoch(model, valid_loader):
             # batch = {k: v.to(CFG.device) for k, v in batch.items() if k not in ["caption", "image_path1", "image_path2", "image_z_index"]}
 
             visualize = iteration % CFG.visualize_every == 0
-            loss = model(batch, mode="valid", visualize=visualize)
+            loss, softmax_logit = model(batch, mode="valid", visualize=visualize, epoch=epoch)
+            softmax_logits.append(softmax_logit)
 
         count = batch["image1"].size(0)
         loss_meter.update(loss.item(), count)
 
         tqdm_object.set_postfix(valid_loss=loss_meter.avg)
-    return loss_meter
+    return loss_meter, softmax_logits
 
+
+def visualize_clip_loss(softmax_logits, suffix, writer, epoch):
+    import torchvision
+    import seaborn as sns
+    import io
+    from PIL import Image
+    import matplotlib.pyplot as plt
+    images = []
+    for logits in softmax_logits:
+        ax = sns.heatmap(logits.detach().cpu().numpy())
+        sns_figure = ax.get_figure()
+        buf = io.BytesIO()
+        sns_figure.savefig(buf, format='png')
+
+        buf.seek(0)
+        image = buf.read()
+        image = Image.open(io.BytesIO(image))
+        image = torchvision.transforms.functional.pil_to_tensor(image)
+        images.append(image)
+        plt.clf()
+    grid = torchvision.utils.make_grid(images, nrow=1)
+    writer.add_image(f"CLIP_Loss/{suffix}", grid, epoch)
 
 def main():
     writer = SummaryWriter(Path("logs") / CFG.experiment_name / "runs")
@@ -145,15 +170,17 @@ def main():
     for epoch in range(CFG.epochs):
         print(f"Epoch: {epoch + 1}")
         model.train()
-        train_loss = train_epoch(model, train_loader, optimizer, lr_scheduler, step, scaler)
+        train_loss, softmax_logits = train_epoch(model, train_loader, optimizer, lr_scheduler, step, scaler, epoch=epoch)
         if step == "epoch":
             lr_scheduler.step(train_loss.avg)
         writer.add_scalar("Loss/train", train_loss.avg, epoch)
+        visualize_clip_loss(softmax_logits, "train", writer, epoch)
         model.eval()
         with torch.no_grad():
-            valid_loss = valid_epoch(model, valid_loader)
+            valid_loss, softmax_logits = valid_epoch(model, valid_loader)
             writer.add_scalar("Loss/valid", valid_loss.avg, epoch)
-        
+            visualize_clip_loss(softmax_logits, "valid", writer, epoch)
+
         if valid_loss.avg < best_loss:
             best_loss = valid_loss.avg
             torch.save(model.state_dict(), Path("logs") / CFG.experiment_name / "best.pt")

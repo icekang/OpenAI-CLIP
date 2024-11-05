@@ -31,17 +31,28 @@ class CLIPModel(nn.Module):
 
         self.temperature = temperature
 
-    def visualize_clip_loss(self, logits, suffix=""):
-        import matplotlib.pyplot as plt
+    def visualize_clip_loss(self, logits, epoch, suffix="", writer=None):
+        import torchvision
+        # import matplotlib.pyplot as plt
         import seaborn as sns
-        import datetime
-        debug_dir = Path("logs" ) /  CFG.experiment_name / "debug_loss"
-        debug_dir.mkdir(exist_ok=True)
-
+        import io
+        # import datetime
+        # debug_dir = Path("logs" ) /  CFG.experiment_name / "debug_loss"
+        # debug_dir.mkdir(exist_ok=True)
         sns.heatmap(logits.detach().cpu().numpy())
-        time_now = str(datetime.datetime.now()).replace(" ", "_")
-        plt.savefig(debug_dir / f'{time_now}_{suffix}.png')
-        plt.close('all')
+        sns_figure = ax.get_figure()
+        buf = io.BytesIO()
+        sns_figure.savefig(buf, format='png')
+
+        buf.seek(0)
+        image = buf.read()
+        if writer is not None:
+            grid = torchvision.utils.make_grid(image, nrow=1)
+            writer.log_image(f"CLIP_Loss/{suffix}", grid, epoch)
+
+        # time_now = str(datetime.datetime.now()).replace(" ", "_")
+        # plt.savefig(debug_dir / f'{time_now}_{suffix}.png')
+        # plt.close('all')
     
     def visualize_data(self, data, suffix=""):
         import matplotlib.pyplot as plt
@@ -63,9 +74,12 @@ class CLIPModel(nn.Module):
         ).plot(figsize=((batch_idx + 1) * 2, 4), output_path=debug_dir / f"{time_now}_{suffix}_subjects.png")
         plt.close('all')
 
-    def forward(self, batch, mode="train", visualize=False):
+    def forward(self, batch, mode="train", visualize=False, epoch=None, writer=None):
         image1 = batch["image1"]
         image2 = batch["image2"]
+
+        image1 = torch.nan_to_num(image1, nan=0.0)
+        image2 = torch.nan_to_num(image2, nan=0.0)
 
         # Check for NaN values
         masks = torch.isnan(image1) | torch.isnan(image2)
@@ -81,28 +95,20 @@ class CLIPModel(nn.Module):
         image_embeddings1 = self.image_projection1(image_features1)
         image_embeddings2 = self.image_projection2(image_features2)
 
+        image_embeddings1 = F.normalize(image_embeddings1, p=2, dim=-1)
+        image_embeddings2 = F.normalize(image_embeddings2, p=2, dim=-1)
+
         # Calculating the Loss
         logits = ((image_embeddings2 @ image_embeddings1.T) + (image_embeddings1 @ image_embeddings2.T)) / 2.0 / self.temperature
-        if visualize:
-            # non_nan_masks = ~masks.any(dim=(1, 2, 3, 4))
-            self.visualize_data(batch, suffix=f"{mode}_data")
-            # self.visualize_clip_loss(F.softmax(logits[non_nan_masks][:, non_nan_masks], dim=-1), suffix=f"{mode}_logits")
-            self.visualize_clip_loss(F.softmax(logits, dim=-1), suffix=f"{mode}_logits")
-        # images_similarity1 = image_embeddings1 @ image_embeddings1.T
-        # images_similarity2 = image_embeddings2 @ image_embeddings2.T
-        # targets = F.softmax(
-        #     (images_similarity1 + images_similarity2) / 2 * self.temperature, dim=-1
-        # )
-        # self.visualize_clip_loss(targets, suffix=f"{mode}_targets")
+        # TODO: Check if logits is NaN or inf or -inf
+
+        # if visualize:
+        #     # self.visualize_data(batch, suffix=f"{mode}_data")
+        #     self.visualize_clip_loss(F.softmax(logits, dim=-1), suffix=f"{mode}_logits_epoch_{epoch}", writer=writer)
         batch_size = image_embeddings1.shape[0]
-        # nan_masks = masks.any(dim=(1, 2, 3, 4))
-        # logits[nan_masks, :] *= 0
-        # logits[:, nan_masks] *= 0
         loss = nn.CrossEntropyLoss()(logits, torch.arange(batch_size, device=CFG.device)) # use a simpler loss function 
-        # images_loss2 = cross_entropy(logits, targets, reduction='none')
-        # images_loss1 = cross_entropy(logits.T, targets.T, reduction='none')
-        # loss =  (images_loss1 + images_loss2) / 2.0 # shape: (batch_size)
-        return loss.mean()
+        # TODO: Check if loss is NaN or inf or -inf
+        return loss.mean(), F.softmax(logits, dim=-1).detach().cpu()
 
 
 def cross_entropy(preds, targets, reduction='none'):

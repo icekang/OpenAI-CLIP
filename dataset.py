@@ -97,33 +97,33 @@ def get_transforms(mode="train"):
 
 def get_optimized_dataloaders(image_filenames1, image_filenames2, transforms):
     subjects = []
-    # for image_path1, image_path2 in zip(image_filenames1, image_filenames2):
-    #     shape1 = sitk.ReadImage(image_path1)
-    #     shape1 = shape1.GetSize()
-    #     direction1 = sitk.ReadImage(image_path1).GetDirection()
-    #     shape2 = sitk.ReadImage(image_path2)
-    #     shape2 = shape2.GetSize()
-    #     direction2 = sitk.ReadImage(image_path2).GetDirection()
-    #     if shape1 != shape2 or direction1 != direction2:
-    #         if shape1[-1] < shape2[-1]:
-    #             larger_image_path = image_path2
-    #             smaller_image_path = image_path1
-    #             smaller_shape = shape1
-    #         else:
-    #             larger_image_path = image_path1
-    #             smaller_image_path = image_path2
-    #             smaller_shape = shape2
+    for image_path1, image_path2 in zip(image_filenames1, image_filenames2):
+        shape1 = sitk.ReadImage(image_path1)
+        shape1 = shape1.GetSize()
+        direction1 = sitk.ReadImage(image_path1).GetDirection()
+        shape2 = sitk.ReadImage(image_path2)
+        shape2 = shape2.GetSize()
+        direction2 = sitk.ReadImage(image_path2).GetDirection()
+        if shape1 != shape2 or direction1 != direction2:
+            if shape1[-1] < shape2[-1]:
+                larger_image_path = image_path2
+                smaller_image_path = image_path1
+                smaller_shape = shape1
+            else:
+                larger_image_path = image_path1
+                smaller_image_path = image_path2
+                smaller_shape = shape2
 
-    #         larger_image = sitk.GetArrayFromImage(sitk.ReadImage(larger_image_path))
-    #         larger_image = larger_image [:smaller_shape[-1], ...]
-    #         larger_image = sitk.GetImageFromArray(larger_image)
-    #         larger_image.SetSpacing(sitk.ReadImage(smaller_image_path).GetSpacing())
-    #         larger_image.SetDirection(sitk.ReadImage(smaller_image_path).GetDirection())
+            larger_image = sitk.GetArrayFromImage(sitk.ReadImage(larger_image_path))
+            larger_image = larger_image [:smaller_shape[-1], ...]
+            larger_image = sitk.GetImageFromArray(larger_image)
+            larger_image.SetSpacing(sitk.ReadImage(smaller_image_path).GetSpacing())
+            larger_image.SetDirection(sitk.ReadImage(smaller_image_path).GetDirection())
 
-    #         import shutil
-    #         # shutil.move(larger_image_path, larger_image_path.replace('.nii.gz', '_original.nii.gz'))
-    #         print(f"Resizing {larger_image_path} to {smaller_shape} (Original image has been saved as {larger_image_path.replace('.nii.gz', '_original.nii.gz')})")
-    #         sitk.WriteImage(larger_image, larger_image_path)
+            import shutil
+            shutil.move(larger_image_path, larger_image_path.replace('.nii.gz', '_original.nii.gz'))
+            print(f"Resizing {larger_image_path} to {smaller_shape} (Original image has been saved as {larger_image_path.replace('.nii.gz', '_original.nii.gz')})")
+            sitk.WriteImage(larger_image, larger_image_path)
 
     for image_path1, image_path2 in zip(image_filenames1, image_filenames2):
         subject = tio.Subject(
