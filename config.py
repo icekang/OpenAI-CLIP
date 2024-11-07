@@ -1,18 +1,20 @@
 import torch
 
-experiment_name="CLIP"
+experiment_name="CLIP_PreIVL_PostStent"
 debug = False
 
 visualize_every = 10
 captions_path = "."
+skip_data_check = False
 batch_size = 16
 num_workers = 18
-lr = 1e-3
+lr = 1e-4
 weight_decay = 1e-3
 patience = 2
 factor = 0.5
 epochs = 100
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+max_norm = 1.0
 
 image_embedding = 1120
 

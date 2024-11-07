@@ -39,7 +39,7 @@ class CLIPModel(nn.Module):
         # import datetime
         # debug_dir = Path("logs" ) /  CFG.experiment_name / "debug_loss"
         # debug_dir.mkdir(exist_ok=True)
-        sns.heatmap(logits.detach().cpu().numpy())
+        ax = sns.heatmap(logits.detach().cpu().numpy())
         sns_figure = ax.get_figure()
         buf = io.BytesIO()
         sns_figure.savefig(buf, format='png')
@@ -94,9 +94,11 @@ class CLIPModel(nn.Module):
         # Getting Image and Text Embeddings (with same dimension)
         image_embeddings1 = self.image_projection1(image_features1)
         image_embeddings2 = self.image_projection2(image_features2)
+        # assert image_embeddings1.shape == image_embeddings2.shape, f"{image_embeddings1.shape} != {image_embeddings2.shape}"
+        # assert len(image_embeddings1.shape) == 2, f"Expected 2D tensor, got {len(image_embeddings1.shape)}D tensor ({image_embeddings1.shape})"
 
-        image_embeddings1 = F.normalize(image_embeddings1, p=2, dim=-1)
-        image_embeddings2 = F.normalize(image_embeddings2, p=2, dim=-1)
+        # image_embeddings1 = F.normalize(image_embeddings1, p=2, dim=1)
+        # image_embeddings2 = F.normalize(image_embeddings2, p=2, dim=1)
 
         # Calculating the Loss
         logits = ((image_embeddings2 @ image_embeddings1.T) + (image_embeddings1 @ image_embeddings2.T)) / 2.0 / self.temperature
@@ -108,6 +110,25 @@ class CLIPModel(nn.Module):
         batch_size = image_embeddings1.shape[0]
         loss = nn.CrossEntropyLoss()(logits, torch.arange(batch_size, device=CFG.device)) # use a simpler loss function 
         # TODO: Check if loss is NaN or inf or -inf
+        if torch.isnan(loss).any():
+            print("Loss is NaN")
+            print("Image Embeddings 1:", image_embeddings1)
+            print("Image Embeddings 2:", image_embeddings2)
+            print("Logits:", logits)
+            print("Cross Entropy Loss:", loss)
+            torch.save({
+                "image_embeddings1": image_embeddings1,
+                "image_embeddings2": image_embeddings2,
+                "logits": logits,
+                "loss": loss,
+                "image1": image1,
+                "image2": image2,
+                "image_encoder1": self.image_encoder1,
+                "image_encoder2": self.image_encoder2,
+                "image_projection1": self.image_projection1,
+                "image_projection2": self.image_projection
+            }, "nan_loss_details.pth")
+            # raise ValueError("Loss is NaN")
         return loss.mean(), F.softmax(logits, dim=-1).detach().cpu()
 
 

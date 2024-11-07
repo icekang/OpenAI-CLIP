@@ -1,0 +1,43 @@
+experiment_name: CLIP_PreIVL_PostStent_no_wd
+
+debug : False
+visualize_every : 10
+captions_path : "./pre_final_coregistration.csv"
+skip_data_check : true
+batch_size : 9
+num_workers : 18
+lr : 0.001
+weight_decay : 0.0
+patience : 2
+factor : 0.5
+epochs : 100
+
+image_embedding : 1120
+
+pretrained : false # for both image encoder and text encoder
+trainable : true # for both image encoder and text encoder
+temperature : 1.0
+
+# image size
+IMG_SIZE_W : 512
+IMG_SIZE_H : 512
+IMG_SIZE_D : 32
+
+CROP_SIZE : 500
+CROP_SIZE_D : 32
+
+# CLIP
+shared_projector: true
+shared_encoder: true
+
+# for projection head; used for both image and text encoders
+num_projection_layers : 1
+projection_dim : 256 
+dropout : 0.0
+
+nnUNet :
+  dataset_name_or_id: '302'
+  configuration: 3d_32x512x512_b2
+  fold: 0
+  trainer_name: nnUNetTrainer
+  plans_identifier: nnUNetPlans

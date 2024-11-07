@@ -38,7 +38,7 @@ def seed_everything(seed):
     torch.backends.cudnn.benchmark = False
 
 def make_train_valid_dfs():
-    dataframe = pd.read_csv(f"{CFG.captions_path}/pre_final_coregistration.csv")
+    dataframe = pd.read_csv(f"{CFG.captions_path}")
     max_id = dataframe["id"].max() + 1 if not CFG.debug else 100
     image_ids = np.arange(0, max_id)
     np.random.seed(42)
@@ -58,6 +58,7 @@ def build_loaders(dataframe, mode):
         image_filenames1=dataframe["image1"].values,
         image_filenames2=dataframe["image2"].values,
         transforms=transforms,
+        skip_data_check=CFG.skip_data_check,
     )
     # dataset = CLIPDataset(
     #     dataframe["image1"].values,
@@ -83,7 +84,7 @@ def train_epoch(model, train_loader, optimizer, lr_scheduler, step, scaler, epoc
         device = CFG.device
         batch['image1'] = batch['image1'][tio.DATA].permute(0, 1, 4, 3, 2).to(device)
         batch['image2'] = batch['image2'][tio.DATA].permute(0, 1, 4, 3, 2).to(device)
-        with torch.autocast(device_type="cuda", dtype=torch.float16):
+        with torch.autocast(device_type="cuda", dtype=torch.float32):
             visualize = iteration % CFG.visualize_every == 0
             loss, softmax_logit = model(batch, visualize=visualize, epoch=epoch)
             if loss.isnan():
@@ -92,6 +93,8 @@ def train_epoch(model, train_loader, optimizer, lr_scheduler, step, scaler, epoc
             softmax_logits.append(softmax_logit)
         
         scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=CFG.max_norm, norm_type=2)
         scaler.step(optimizer)
         scaler.update()
         if step == "batch":
