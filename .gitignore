@@ -8,3 +8,5 @@ debug_clip*/
 logs/
 runs/
 visual_feature_visualization/
+*.pth
+*.pt
