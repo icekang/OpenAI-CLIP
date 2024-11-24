@@ -10,7 +10,7 @@ from torch import nn
 
 import config as CFG
 from dataset import CLIPDataset, get_transforms, get_optimized_dataloaders, get_torchio_transforms
-from CLIP import CLIPModel
+from CLIP import CLIPModel, SymileModel
 from utils import AvgMeter, get_lr
 import torchio as tio
 from torch.utils.tensorboard import SummaryWriter
@@ -54,9 +54,11 @@ def make_train_valid_dfs():
 def build_loaders(dataframe, mode):
     # transforms = get_transforms(mode=mode)
     transforms = get_torchio_transforms(mode=mode)
+    list_of_image_filenames = []
+    for i in range(len(dataframe.columns) - 1):
+        list_of_image_filenames.append(dataframe[f"image{i+1}"].values)
     dataloader = get_optimized_dataloaders(
-        image_filenames1=dataframe["image1"].values,
-        image_filenames2=dataframe["image2"].values,
+        *list_of_image_filenames,
         transforms=transforms,
         skip_data_check=CFG.skip_data_check,
     )
@@ -84,6 +86,8 @@ def train_epoch(model, train_loader, optimizer, lr_scheduler, step, scaler, epoc
         device = CFG.device
         batch['image1'] = batch['image1'][tio.DATA].permute(0, 1, 4, 3, 2).to(device)
         batch['image2'] = batch['image2'][tio.DATA].permute(0, 1, 4, 3, 2).to(device)
+        if 'image3' in batch:
+            batch['image3'] = batch['image3'][tio.DATA].permute(0, 1, 4, 3, 2).to(device)
         with torch.autocast(device_type="cuda", dtype=torch.float32):
             visualize = iteration % CFG.visualize_every == 0
             loss, softmax_logit = model(batch, visualize=visualize, epoch=epoch)
@@ -116,6 +120,8 @@ def valid_epoch(model, valid_loader, epoch=None):
         device = CFG.device
         batch['image1'] = batch['image1'][tio.DATA].permute(0, 1, 4, 3, 2).to(device)
         batch['image2'] = batch['image2'][tio.DATA].permute(0, 1, 4, 3, 2).to(device)
+        if 'image3' in batch:
+            batch['image3'] = batch['image3'][tio.DATA].permute(0, 1, 4, 3, 2).to(device)
         with torch.autocast(device_type="cuda", dtype=torch.float16):
             # batch = {k: v.to(CFG.device) for k, v in batch.items() if k not in ["caption", "image_path1", "image_path2", "image_z_index"]}
 
@@ -158,8 +164,10 @@ def main():
     train_loader = build_loaders(train_df, mode="train")
     valid_loader = build_loaders(valid_df, mode="valid")
 
-
-    model = CLIPModel().to(CFG.device)
+    if CFG.model == 'symile':
+        model = SymileModel().to(CFG.device)
+    else:
+        model = CLIPModel().to(CFG.device)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=CFG.lr, weight_decay=CFG.weight_decay
     )

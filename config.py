@@ -4,6 +4,7 @@ experiment_name="CLIP_PreIVL_PostStent"
 debug = False
 
 visualize_every = 10
+model = "clip"
 captions_path = "."
 skip_data_check = False
 batch_size = 16

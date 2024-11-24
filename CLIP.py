@@ -2,10 +2,15 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+import torchvision
+import seaborn as sns
+import io
+
 import config as CFG
 from modules import ImageEncoder, ProjectionHead
 from pathlib import Path
 import torchio as tio
+from symile import Symile
 
 class CLIPModel(nn.Module):
     def __init__(
@@ -130,6 +135,68 @@ class CLIPModel(nn.Module):
             }, "nan_loss_details.pth")
             # raise ValueError("Loss is NaN")
         return loss.mean(), F.softmax(logits, dim=-1).detach().cpu()
+
+class SymileModel(nn.Module):
+    def __init__(
+        self,
+        temperature=CFG.temperature,
+        image_embedding=CFG.image_embedding,
+        shared_projector=CFG.shared_projector,
+        shared_encoder=CFG.shared_encoder,
+    ):
+        super().__init__()
+        self.image_encoder1 = ImageEncoder()
+        self.image_projection1 = ProjectionHead(embedding_dim=image_embedding)
+
+        if CFG.shared_encoder:
+            self.image_encoder2 = self.image_encoder1
+            self.image_encoder3 = self.image_encoder1
+        else:
+            self.image_encoder2 = ImageEncoder()
+            self.image_encoder3 = ImageEncoder()
+        
+        if CFG.shared_projector:
+            self.image_projection2 = self.image_projection1
+            self.image_projection3 = self.image_projection1
+        else:
+            self.image_projection2 = ProjectionHead(embedding_dim=image_embedding)
+            self.image_projection3 = ProjectionHead(embedding_dim=image_embedding)
+
+        self.temperature = temperature
+        self.symile_loss = Symile(negative_sampling="n")
+
+    def forward(self, batch, mode="train", visualize=False, epoch=None, writer=None):
+        image1 = batch["image1"]
+        image2 = batch["image2"]
+        image3 = batch["image3"]
+
+        image1 = torch.nan_to_num(image1, nan=0.0)
+        image2 = torch.nan_to_num(image2, nan=0.0)
+        image3 = torch.nan_to_num(image3, nan=0.0)
+
+        # Check for NaN values
+        masks = torch.isnan(image1) | torch.isnan(image2) | torch.isnan(image3)
+        masks = ~masks.any(dim=(1, 2, 3, 4))
+        image1 = image1[masks]
+        image2 = image2[masks]
+        image3 = image3[masks]
+
+        # Getting Image and Text Features
+        image_features1 = self.image_encoder1(image1)
+        image_features2 = self.image_encoder2(image2)
+        image_features3 = self.image_encoder3(image3)
+
+        # Getting Image and Text Embeddings (with same dimension)
+        image_embeddings1 = self.image_projection1(image_features1)
+        image_embeddings2 = self.image_projection2(image_features2)
+        image_embeddings3 = self.image_projection3(image_features3)
+
+        # Calculating the Loss
+        loss = self.symile_loss([image_embeddings1, image_embeddings2, image_embeddings3], self.temperature)
+
+        if torch.isnan(loss).any():
+            raise ValueError("Loss is NaN")
+        return loss.mean(), torch.zeros((1, 1), device='cpu')
 
 
 def cross_entropy(preds, targets, reduction='none'):
