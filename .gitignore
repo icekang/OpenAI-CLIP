@@ -11,3 +11,4 @@ visual_feature_visualization/
 *.pth
 *.pt
 LLSUB*/
+.venv/
