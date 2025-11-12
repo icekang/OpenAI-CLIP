@@ -1,0 +1,12 @@
+/nfs/erelab001/shared/Computational_Group/Naravich/OpenAI-CLIP/.venv/bin/python
+Start training with the following configuration:
+<module 'config' from '/nfs/erelab001/shared/Computational_Group/Naravich/OpenAI-CLIP/config.py'>
+Using device: cpu
+
+#######################################################################
+Please cite the following paper when using nnU-Net:
+Isensee, F., Jaeger, P. F., Kohl, S. A., Petersen, J., & Maier-Hein, K. H. (2021). nnU-Net: a self-configuring method for deep learning-based biomedical image segmentation. Nature methods, 18(2), 203-211.
+#######################################################################
+
+<All keys matched successfully>
+Converted CLIP model to nnU-Net model and saved to nnunet.pt
