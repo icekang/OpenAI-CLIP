@@ -13,4 +13,4 @@ module load miniforge/24.3.0-0
 source activate /nfs/erelab001/shared/Computational_Group/Naravich/OpenAI-CLIP/.venv
 which python
 
-python main.py --config configs/configs/clip_shared_projector_shared_encoder_preivl_poststent_wd.yaml
+python main.py --config configs/clip_shared_projector_shared_encoder_preivl_poststent_wd.yaml
